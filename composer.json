@@ -1,8 +1,8 @@
 {
-	"name": "jesusslim/mqttclient",
-	"description": "php mqtt client",
+	"name": "dongyaocn/swoole-mqtt-client",
+	"description": "php swoole mqtt client",
 	"license": "MIT",
-	"keywords": ["mqtt"],
+	"keywords": ["mqtt mqtt3.1.1 swoole"],
 	"version": "1.3",
 	"authors": [
 		{
