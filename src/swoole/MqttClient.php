@@ -34,6 +34,8 @@ class MqttClient
     private $port;
     private $client_id;
 
+    private $dns_lookup;
+
     //协议最大长度
     private $package_max_length;
 
@@ -97,6 +99,7 @@ class MqttClient
     {
         $this->host = $host;
         $this->port = $port;
+        $this->dns_lookup = false;
         $this->client_id = $client_id;
         $this->msg_id = new MessageIdIterator();
         $this->topics = [];
@@ -234,6 +237,14 @@ class MqttClient
     public function setStore($store)
     {
         $this->store = $store;
+    }
+
+    /**
+     * @param $enabled
+     */
+    public function setDnsLookup($enabled)
+    {
+        $this->dns_lookup = boolval($enabled);
     }
 
     /**
@@ -503,9 +514,13 @@ class MqttClient
             $this->trigger(ClientTriggers::SOCKET_CLOSE,null);
         });
 
-        swoole_async_dns_lookup($this->host, function($host, $ip) use($port){
-            $this->socket->connect($ip, $port);
-        });
+        if ($this->dns_lookup === true) {
+            swoole_async_dns_lookup($this->host, function($host, $ip) use($port){
+                $this->socket->connect($ip, $port);
+            });
+        } else {
+            $this->socket->connect($this->host, $port);
+        }
     }
 
     /**
