@@ -8,7 +8,7 @@ PHP mqtt client
 
 Install:
 
-	composer require jesusslim/mqttclient
+	composer require dongyaocn/swoole-mqtt-client
 
 If your composer not allowed dev-master,add this config
 
