@@ -551,6 +551,18 @@ class MqttClient
     }
 
     /**
+     * @return mixed
+     */
+    public function hasConnected()
+    {
+        if (is_null($this->socket)) {
+            return false;
+        }
+
+        return $this->socket->isConnected();
+    }
+
+    /**
      * keep alive
      */
     public function keepAlive(){
