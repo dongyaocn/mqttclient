@@ -350,7 +350,7 @@ class MqttClient
         $this->socket = new \swoole_client(SWOOLE_SOCK_TCP, SWOOLE_SOCK_ASYNC);
         $this->socket->set([
             'open_mqtt_protocol'     => true,
-            'package_max_length'    => $this->package_max_length,  //协议最大长度
+            // 'package_max_length'    => $this->package_max_length,  //协议最大长度
         ]);
         $port = $this->port;
 
