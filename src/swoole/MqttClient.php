@@ -89,6 +89,8 @@ class MqttClient
 
     /**** tmp ****/
 
+    private $packet_buffer = '';
+
     /**** call back ****/
 
     private $call_backs = [];
@@ -350,7 +352,7 @@ class MqttClient
         $this->socket = new \swoole_client(SWOOLE_SOCK_TCP, SWOOLE_SOCK_ASYNC);
         $this->socket->set([
             'open_mqtt_protocol'     => true,
-            // 'package_max_length'    => $this->package_max_length,  //协议最大长度
+            'package_max_length'    => $this->package_max_length,  //协议最大长度
         ]);
         $port = $this->port;
 
@@ -364,9 +366,134 @@ class MqttClient
             $this->trigger(ClientTriggers::SOCKET_CONNECT,null);
         });
 
-        $this->socket->on('receive',function($cli,$data){
-            /* @var MessageInterface $message */
-            $message = $this->read($data);
+        $this->socket->on('receive',function($cli, $data){
+            $cli->sleep();
+            $this->logger->log(MqttLogInterface::ERROR,'Source Data:' . Util::str2hex($data));
+            $messages = $this->read($data, $cli);
+            $this->processReceiveMsg($messages);
+        });
+
+        $this->socket->on('error',function($error){
+            $this->logger->log(MqttLogInterface::ERROR,'Connect fail:'.json_encode($error));
+            $this->reconnect_count ++;
+            if ($this->max_reconnect_times_when_error == 0 || $this->reconnect_count <= $this->max_reconnect_times_when_error){
+                swoole_timer_after($this->reconnect_interval,[$this,'connect']);
+            }else{
+                $this->disconnect();
+            }
+            $this->trigger(ClientTriggers::SOCKET_ERROR,null);
+        });
+
+        $this->socket->on('close',function(){
+            $this->logger->log(MqttLogInterface::ERROR,'Connect close.');
+            if ($this->keep_alive_timer_id != null) {
+                swoole_timer_clear($this->keep_alive_timer_id);
+                $this->keep_alive_timer_id = null;
+            }
+
+            $this->reconnect_count ++;
+            if ($this->max_reconnect_times_when_error == 0 || $this->reconnect_count <= $this->max_reconnect_times_when_error){
+                swoole_timer_after($this->reconnect_interval,[$this,'connect']);
+            }else{
+                $this->disconnect();
+            }
+
+            $this->trigger(ClientTriggers::SOCKET_CLOSE,null);
+        });
+
+        if ($this->dns_lookup === true) {
+            swoole_async_dns_lookup($this->host, function($host, $ip) use($port){
+                $this->socket->connect($ip, $port);
+            });
+        } else {
+            $this->socket->connect($this->host, $port);
+        }
+    }
+
+    /**
+     * write
+     * @param MessageInterface $msg
+     * @return bool
+     * @throws MqttClientException
+     */
+    protected function write(MessageInterface $msg){
+        if (is_null($this->socket)) throw new MqttClientException('socket is null');
+        return $this->socket->send($msg->encode());
+    }
+
+    /**
+     * read
+     * @param $data
+     * @param $client
+     * @return bool|MessageInterface
+     */
+    protected function read($data, $client)
+    {
+        $this->logger->log(MqttLogInterface::DEBUG, 'Type: ' . dechex( ord($data{0}) >> 4));
+        $messages = [];
+
+        while (true) {
+            $msg = $this->readPacket($data);
+
+            $messages[] = $msg;
+
+            $data = substr($data, $msg->getFullLength());
+
+            if (strlen($data) == 0) {
+                break;
+            }
+
+            if (strlen($data) > 0) {
+                $index = 1;
+                $next_remain_length = Util::decodeRemainLength($data, $index);
+                $full_next_packet_length = 1 + strlen(Util::packRemainLength($next_remain_length)) + $next_remain_length;
+
+                if (strlen($data) < $full_next_packet_length) {
+                    $this->logger->log(MqttLogInterface::DEBUG, 'Lost Length : ' . strlen($data) . '<' . $full_next_packet_length);
+
+                    $lost_packet_length = $full_next_packet_length - strlen($data);
+                    $lost_packet = $client->recv($lost_packet_length, \swoole_client::MSG_DONTWAIT);
+
+
+                    $this->logger->log(MqttLogInterface::DEBUG,'Lost Prev Data:' . Util::str2hex($data));
+                    $this->logger->log(MqttLogInterface::DEBUG,'Lost Next Data:' . Util::str2hex($lost_packet));
+
+                    $data .= $lost_packet;
+
+                    $this->logger->log(MqttLogInterface::DEBUG,'Lost Full Data:' . Util::str2hex($data));
+                }
+            }
+        }
+
+        $client->wakeup();
+
+        return $messages;
+    }
+
+    /**
+     * @param $data
+     * @return bool|MessageInterface
+     * @throws MqttClientException
+     */
+    protected function readPacket($data) {
+        $type = Util::decodeCmd(ord($data{0}));
+        $index = 1;
+        $remaining_length = Util::decodeRemainLength($data,$index);
+        $msg = Message::produce($type, $this);
+        if ($msg === false) throw new MqttClientException("read message produce fail $type");
+        $msg->decode($data,$remaining_length);
+
+        $this->logger->log(MqttLogInterface::DEBUG, "Packet Payload : " . $msg->getPayload());
+
+        return $msg;
+    }
+
+    /**
+     * @param $messages
+     */
+    private function processReceiveMsg($messages)
+    {
+        foreach ($messages as $message) {
             switch ($message->getType()){
                 case MessageType::CONNACK:
                     $this->logger->log(MqttLogInterface::DEBUG,'Receive CONNACK.');
@@ -481,73 +608,12 @@ class MqttClient
                     $this->trigger(ClientTriggers::RECEIVE_UNSUBACK,$message);
                     break;
                 default:
+                    $this->logger->log(MqttLogInterface::DEBUG, '无效Packet');
                     break;
             }
+
             $this->trigger(ClientTriggers::SOCKET_RECEIVE,$message);
-        });
-
-        $this->socket->on('error',function($error){
-            $this->logger->log(MqttLogInterface::ERROR,'Connect fail:'.json_encode($error));
-            $this->reconnect_count ++;
-            if ($this->max_reconnect_times_when_error == 0 || $this->reconnect_count <= $this->max_reconnect_times_when_error){
-                swoole_timer_after($this->reconnect_interval,[$this,'connect']);
-            }else{
-                $this->disconnect();
-            }
-            $this->trigger(ClientTriggers::SOCKET_ERROR,null);
-        });
-
-        $this->socket->on('close',function(){
-            $this->logger->log(MqttLogInterface::ERROR,'Connect close.');
-            if ($this->keep_alive_timer_id != null) {
-                swoole_timer_clear($this->keep_alive_timer_id);
-                $this->keep_alive_timer_id = null;
-            }
-
-            $this->reconnect_count ++;
-            if ($this->max_reconnect_times_when_error == 0 || $this->reconnect_count <= $this->max_reconnect_times_when_error){
-                swoole_timer_after($this->reconnect_interval,[$this,'connect']);
-            }else{
-                $this->disconnect();
-            }
-
-            $this->trigger(ClientTriggers::SOCKET_CLOSE,null);
-        });
-
-        if ($this->dns_lookup === true) {
-            swoole_async_dns_lookup($this->host, function($host, $ip) use($port){
-                $this->socket->connect($ip, $port);
-            });
-        } else {
-            $this->socket->connect($this->host, $port);
         }
-    }
-
-    /**
-     * write
-     * @param MessageInterface $msg
-     * @return bool
-     * @throws MqttClientException
-     */
-    protected function write(MessageInterface $msg){
-        if (is_null($this->socket)) throw new MqttClientException('socket is null');
-        return $this->socket->send($msg->encode());
-    }
-
-    /**
-     * read
-     * @param $data
-     * @return bool|MessageInterface
-     * @throws MqttClientException
-     */
-    protected function read($data){
-        $type = Util::decodeCmd(ord($data{0}));
-        $index = 1;
-        $remaining_length = Util::decodeRemainLength($data,$index);
-        $msg = Message::produce($type,$this);
-        if ($msg === false) throw new MqttClientException("read message produce fail $type");
-        $msg->decode($data,$remaining_length);
-        return $msg;
     }
 
     /**
@@ -729,7 +795,13 @@ class MqttClient
      */
     public function unregisterResend($store_msg_type,$store_key,$store_sub_key){
         $timer_id = $this->getStore()->get(self::TIMER_TAG.$store_msg_type,$store_key,$store_sub_key);
-        if ($timer_id > 0) swoole_timer_clear($timer_id);
+        if ($timer_id > 0) {
+            try {
+                swoole_timer_clear($timer_id);
+            } catch (\Throwable $e) {
+                $this->logger->log(MqttLogInterface::DEBUG,'unRegisterResend Timer ERROR. MESSAGE TYPE:'.$store_msg_type.' ACTION:'.$store_key.' MESSAGE_ID:'.$store_sub_key . ' Trace: ' . $e->getTraceAsString());
+            }
+        }
         $this->getStore()->delete(self::TIMER_TAG.$store_msg_type,$store_key,$store_sub_key);
     }
 
@@ -750,6 +822,7 @@ class MqttClient
                 $container->call($topic->getHandler(),['msg' => $publish->getMessage(),'msg_id' => $publish->getMessageId(),'topic' => $publish->getTopic()]);
             }
         }
+        unset($container);
     }
 
     /**
@@ -789,6 +862,9 @@ class MqttClient
         if (isset($this->call_backs[$trigger])){
             $container = $this->produceContainer();
             $container->call($this->call_backs[$trigger],['msg' => $msg]);
+
+            unset($this->call_backs[$trigger]);
+            unset($container);
         }
     }
 }

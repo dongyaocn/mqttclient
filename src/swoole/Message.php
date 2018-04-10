@@ -52,10 +52,13 @@ class Message
      * @return MessageInterface|bool
      */
     public static function produce($type,$client){
-        $cls = self::CLASS_MAP[$type];
-        if ($cls){
-            return new $cls($client);
+        if (isset(self::CLASS_MAP[$type])) {
+            $cls = self::CLASS_MAP[$type];
+            if ($cls){
+                return new $cls($client);
+            }
         }
+
         return false;
     }
 
