@@ -15,6 +15,7 @@ class ClientTriggers
     const SOCKET_CONNECT = 'socket_connect';
     const SOCKET_RECEIVE = 'socket_receive';
     const SOCKET_ERROR = 'socket_error';
+    const SOCKET_FIRST_CLOSE = 'socket_first_close';
     const SOCKET_CLOSE = 'socket_close';
 
     const RECEIVE_CONNACK = 'receive_connack';

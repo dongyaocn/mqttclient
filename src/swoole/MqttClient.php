@@ -386,6 +386,8 @@ class MqttClient
 
         $this->socket->on('close',function(){
             $this->logger->log(MqttLogInterface::ERROR,'Connect close.');
+            $this->trigger(ClientTriggers::SOCKET_FIRST_CLOSE,null);
+
             if ($this->keep_alive_timer_id != null) {
                 swoole_timer_clear($this->keep_alive_timer_id);
                 $this->keep_alive_timer_id = null;
