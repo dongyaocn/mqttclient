@@ -115,10 +115,15 @@ class Publish extends BaseMessage
     /**
      * @param $data
      * @param $pos
+     * @return bool|void
      */
     public function decodePayload($data, $pos)
     {
         $msg_length = $this->getRemainLength() - strlen($this->getTopic()) - 2;
+
+        if ($this->getQos() > 0) {
+            $msg_length -= 2;
+        }
 
         $this->message = substr($data,$pos, $msg_length);
     }

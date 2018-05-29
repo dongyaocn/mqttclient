@@ -445,6 +445,8 @@ class MqttClient
                 break;
             }
 
+            $this->logger->log(MqttLogInterface::DEBUG, 'Type: ' . dechex( ord($data{0}) >> 4));
+
             if (strlen($data) > 0) {
                 $index = 1;
                 $next_remain_length = Util::decodeRemainLength($data, $index);
@@ -485,6 +487,7 @@ class MqttClient
         if ($msg === false) throw new MqttClientException("read message produce fail $type");
         $msg->decode($data,$remaining_length);
 
+        $this->logger->log(MqttLogInterface::DEBUG, "Packet ReMainLength : " . $remaining_length);
         $this->logger->log(MqttLogInterface::DEBUG, "Packet Payload : " . $msg->getPayload());
 
         return $msg;
